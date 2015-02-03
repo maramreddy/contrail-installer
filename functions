@@ -1186,21 +1186,26 @@ function screen_stop() {
     if is_service_enabled $1; then
         # Kill via pid if we have one available
         if [[ -r $SERVICE_DIR/$SCREEN_NAME/$1.pid ]]; then
-            sudo pkill -TERM -P $(cat $SERVICE_DIR/$SCREEN_NAME/$1.pid)
-            ret_val=$?
+            #sudo pkill -TERM -P $(cat $SERVICE_DIR/$SCREEN_NAME/$1.pid)
+            #ret_val=$?
             #If the pid is not parent pid then kill the same process itself
-            if [[ $ret_val -ne 0 ]]; then
+            #if [[ $ret_val -ne 0 ]]; then
+	    if [[ $(ps -ef | grep $(cat $SERVICE_DIR/$SCREEN_NAME/$1.pid) | wc -l 2>/dev/null) -gt 1 ]]; then
                 sudo kill -9 $(cat $SERVICE_DIR/$SCREEN_NAME/$1.pid)
             fi
             rm $SERVICE_DIR/$SCREEN_NAME/$1.pid
         fi
-        if [[ "$1" == "agent" ]]; then
+        # Checking for .pid file before killing the screen
+        if [[ "$1" == "agent" ]] && [[ -r $SERVICE_DIR/$SCREEN_NAME/$1_1.pid ]]; then
             sudo kill -9 $(cat $SERVICE_DIR/$SCREEN_NAME/$1_1.pid)
             rm $SERVICE_DIR/$SCREEN_NAME/$1_1.pid
         fi
         if [[ "$USE_SCREEN" = "True" ]]; then
             # Clean up the screen window
-            screen -S $SCREEN_NAME -p $1 -X kill
+            #assaign the status of killing the screen to a variable to avoid exiting from script.    
+            status=$(echo $(screen -S $SCREEN_NAME -p $1 -X kill))
+            echo $status   
+            #screen -S $SCREEN_NAME -p $1 -X kill
         fi
     fi
 }
@@ -1243,7 +1248,7 @@ function screen_rc {
 # This is used for ``service_check`` when all the ``screen_it`` are called finished
 # init_service_check
 function init_service_check() {
-    SCREEN_NAME=${SCREEN_NAME:-stack}
+    SCREEN_NAME=${SCREEN_NAME:-contrail}
     SERVICE_DIR=${SERVICE_DIR:-${DEST}/status}
 
     if [[ ! -d "$SERVICE_DIR/$SCREEN_NAME" ]]; then

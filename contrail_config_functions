@@ -230,7 +230,7 @@ function replace_vnc_api_lib_conf()
     file="/etc/contrail/vnc_api_lib.ini"
     if [ "$CONTRAIL_DEFAULT_INSTALL" == "True" ]; then
         check_replace_value $file global WEB_SERVER '127.0.0.1'
-        check_replace_value $file global WEB_PORT 8082 ; connection to api-server directly
+        check_replace_value $file global WEB_PORT 8082  #connection to api-server directly
         check_replace_value $file global BASE_URL  '/'
     
         check_replace_value $file auth AUTHN_TYPE  'keystone'
@@ -492,7 +492,8 @@ function _rewrite_ifcfg_file()
      
     if [[ ! -f $ifcfg_file ]]; then
         ifcfg_file=$temp_dir_name'/ifcfg-'$dev
-        rm $ifcfg_file
+	#checking if the file exists before removing
+        [ -e $ifcfg_file ] && rm $ifcfg_file
         echo "#Contrail-$dev" >> $ifcfg_file
         echo "TYPE=Ethernet" >> $ifcfg_file
 	echo "ONBOOT=yes" >> $ifcfg_file
@@ -602,9 +603,10 @@ function replace_irond_basic_auth_users()
           sudo chmod 664 $file1
       fi
       tmp_file="/etc/contrail/basicauthusers.properties"
-      sudo grep -q  ^"# Contrail" $file
-      value=$?
-      if [[ $value -eq 1 ]]; then
+      #sudo grep -q  ^"# Contrail" $file
+      #value=$?
+      #if [[ $value -eq 1 ]]; then
+      if [[ "$(sudo grep ^"# Contrail" $file)" = "" ]]; then
           echo '# Contrail users' >> $file
           sudo echo 'api-server:api-server' >> $file
           sudo echo 'schema-transformer:schema-transformer' >> $file
@@ -660,9 +662,10 @@ function write_qemu_conf()
 {
    file="/etc/libvirt/qemu.conf"
    temp_file="qemu.conf"
-   sudo grep -q  ^"cgroup_device_acl" $file
-   value=$?
-   if [[ $value -eq 1 ]] ; then  
+   #sudo grep -q  ^"cgroup_device_acl" $file
+   #value=$?
+   #if [[ $value -eq 1 ]] ; then  
+   if [[ $(sudo grep ^"cgroup_device_acl" $file) = "" ]] ; then
        sudo cp $file $temp_file
        sudo chown `whoami` $temp_file
        sudo echo "cgroup_device_acl = [" >> $temp_file
@@ -713,19 +716,25 @@ function fixup_config_files()
     fi
     
     # Disable selinux
-    sudo sed 's/SELINUX=.*/SELINUX=disabled/g' /etc/selinux/config > config.new
-    sudo mv config.new /etc/selinux/config
-    setenforce 0
+    #selinux is not installed properly. So missing the config file. To selinux, it needs system reboot.
+    #sudo sed 's/SELINUX=.*/SELINUX=disabled/g' /etc/selinux/config > config.new
+    #sudo mv config.new /etc/selinux/config
+    #setenforce 0
 
-    # Disable iptables      
+    # Disable iptables     
+    # Trusty is not supporting chkconfig. sysv-rc-conf is used as equivalent package. iptables process is not present in precise 
     if [[ "$DISTRO" != "trusty" ]]; then
-        sudo chkconfig iptables off
+	    #sudo chkconfig iptables off
+	    :
     else
-        sudo sysv-rc-conf iptables off
+	    sudo sysv-rc-conf iptables off
     fi
+
     sudo iptables --flush 
     
+    if [[ -f /etc/contrail/ctrl-details ]];then
     sudo rm /etc/contrail/ctrl-details
+    fi
     echo 'SERVICE_TOKEN='$SERVICE_TOKEN >> "/etc/contrail/ctrl-details"
     echo 'ADMIN_PASSWORD='$ADMIN_PASSWORD >> "/etc/contrail/ctrl-details"
     echo 'CONTROLLER='$OPENSTACK_IP >> "/etc/contrail/ctrl-details"
@@ -808,10 +817,12 @@ function fixup_config_files()
         #migrate_routes $dev
         :
     fi
+    # Trusty is not supporting chkconfig. sysv-rc-conf is used as equivalent package. network process is not present in precise
     if [[ "$DISTRO" != "trusty" ]]; then
-        sudo chkconfig network on
+        #sudo chkconfig network on
+        :
     else
         sudo sysv-rc-conf network on
     fi
-
+    
 }

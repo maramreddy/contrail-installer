@@ -1,8 +1,9 @@
 # proto is https or ssh
 #! /bin/bash
-
+set -o errexit
 # Contrail NFV
 # ------------
+source localrc
 if [[ $EUID -eq 0 ]]; then
     echo "You are running this script as root."
     echo "Cut it out."
@@ -13,11 +14,12 @@ if [[ "$CONTRAIL_DEFAULT_INSTALL" != "True" ]]; then
 else
     ENABLED_SERVICES=redis,cass,zk,ifmap,disco,apiSrv,schema,svc-mon,control,collector,analytics-api,query-engine,agent,redis-w
 fi
+
 # Save trace setting
 TOP_DIR=`pwd`
 CONTRAIL_USER=$(whoami)
 source functions
-source localrc
+
 
 # Determine what system we are running on. This provides ``os_VENDOR``,
 # ``os_RELEASE``, ``os_UPDATE``, ``os_PACKAGE``, ``os_CODENAME``
@@ -271,6 +273,7 @@ function download_dependencies {
         apt_get install python-setuptools
         apt_get install python-novaclient
         apt_get install curl
+	#trusty is not supporting chkconfig, so sysv-rc-conf used as equivalent
 	if [[ "$DISTRO" != "trusty" ]]; then
             apt_get install chkconfig
         else
@@ -280,7 +283,10 @@ function download_dependencies {
         apt_get install default-jdk javahelper
         apt_get install libcommons-codec-java libhttpcore-java liblog4j1.2-java
 	apt_get install python-software-properties
-        sudo -E add-apt-repository -y cloud-archive:havana
+	#havana is supported in precise only
+	if [[ "$DISTRO" != "trusty" ]]; then
+            sudo -E add-apt-repository -y cloud-archive:havana
+	fi
         sudo -E add-apt-repository -y ppa:opencontrail/ppa
         apt_get update
 
@@ -290,13 +296,13 @@ function download_dependencies {
             apt_get install python-dev autoconf automake build-essential libtool protobuf-compiler libprotobuf-dev
             apt_get install libevent-dev libxml2-dev libxslt-dev
             apt_get install uml-utilities
-            apt_get install libvirt-bin
             apt_get install python-software-properties
             apt_get install python-lxml python-redis python-jsonpickle
             apt_get install ant debhelper 
             apt_get install linux-headers-$(uname -r)
             apt_get install libipfix
-        fi	
+        fi
+	apt_get install libvirt-bin	
         apt_get install python-neutron
         if [[ ${DISTRO} =~ (trusty) ]]; then
             apt_get install software-properties-common
@@ -508,8 +514,11 @@ function build_contrail() {
     C_GUID=$( id -g )
     sudo mkdir -p /var/log/contrail
     sudo chown $C_UID:$C_GUID /var/log/contrail
+    #changing the permissions if dir has some files
+    if [ "$(ls -A /var/log/contrail/ 2 > /dev/null)" != "" ]
+    then
     sudo chmod 755 /var/log/contrail/*
-    
+    fi
     # basic dependencies
     if ! which repo > /dev/null 2>&1 ; then
 	wget http://commondatastorage.googleapis.com/git-repo-downloads/repo
@@ -663,8 +672,10 @@ function install_contrail() {
                 apt_get install neutron-plugin-contrail 
                 apt_get install contrail-config-openstack
                 #apt_get install neutron-plugin-contrail-agent contrail-config-openstack
-                apt_get install contrail-nova-driver 
-                apt_get install contrail-web-core 
+                apt_get install contrail-nova-driver
+		#installing nodejs version required by contrail-web-core 
+                apt_get install nodejs=0.8.15-1contrail1
+		apt_get install contrail-web-core 
                 apt_get install contrail-web-controller
                 apt_get install ifmap-server 
                 apt_get install python-ncclient
@@ -847,9 +858,13 @@ function pywhere() {
 function stop_contrail_services() {
 
     services=(supervisor-analytics supervisor-control supervisor-config supervisor-vrouter contrail-analytics-api contrail-control contrail-query-engine contrail-vrouter-agent contrail-api contrail-discovery contrail-schema contrail-webui-jobserver contrail-collector contrail-dns contrail-svc-monitor contrail-webui-webserver ifmap-server)
+    
     for service in ${services[@]} 
     do
+	#checking for the services whice are started.
+	if [ "$(sudo service $service status | grep "start" 2>/dev/null)" != "" ];then
         sudo service $service stop
+	fi
     done
 }
 
@@ -939,9 +954,14 @@ function start_contrail() {
             screen_it query-engine "sudo PATH=$PATH:/usr/bin LD_LIBRARY_PATH=/usr/lib /usr/bin/contrail-query-engine"
         fi
         sleep 2
-
+	
+	    #use contrail-utils for provisioning another control node. To do so uncomment the below code
         #provision control
-        python $TOP_DIR/provision_control.py --api_server_ip $SERVICE_HOST --api_server_port 8082 --host_name $HOSTNAME --host_ip $HOST_IP
+	    #if [[ "$CONTRAIL_DEFAULT_INSTALL" != "True" ]]; then
+        #	python /usr/share/contrail/provision_control.py --api_server_ip $SERVICE_HOST --api_server_port 8082 --host_name $HOSTNAME --host_ip $HOST_IP
+	    #else
+	    #	python /usr/share/contrail-utils/provision_control.py --api_server_ip $SERVICE_HOST --api_server_port 8082 --host_name $HOSTNAME --host_ip $HOST_IP
+	    #fi
 
         # Provision Vrouter - must be run after API server and schema transformer are up
         sleep 2
@@ -984,8 +1004,9 @@ openstack-dashboard.noarch             2012.1.3-1.fc17     updates
 contrail-agent                         1-1304091654        contrail-agent-1-1304091654.x86_64     
 EOF
 EOF2
+	chmod a+x $TOP_DIR/bin/contrail-version
     fi
-    chmod a+x $TOP_DIR/bin/contrail-version
+    
     
     if [[ "$CONTRAIL_DEFAULT_INSTALL" != "True" ]]; then
         cat > $TOP_DIR/bin/vnsw.hlpr <<END
@@ -1035,8 +1056,22 @@ END
             fi
         fi
     fi
-
-
+    #Checking whether all screens attached to contrail are up or not
+    SERVICES_ENABLED="$(echo $ENABLED_SERVICES | sed 's/,/ /g')"
+    echo "Enabled Services: $SERVICES_ENABLED"
+    screens_failed=""
+    for screen_name in $SERVICES_ENABLED
+    do
+        screen_log_name="screen-$screen_name.log"
+        
+        if [ $(grep -c "failed to start" $TOP_DIR/log/screens/$screen_log_name) -eq 2 ];then
+             screens_failed="$screen_name,$screens_failed"
+        fi
+    done
+    if [ "$screens_failed" != "" ];then
+        echo "$screens_failed are failed to start. So exiting..."
+        exit 1
+    fi
     # restore saved screen settings
     SCREEN_NAME=$SAVED_SCREEN_NAME
     return
@@ -1071,7 +1106,11 @@ function configure_contrail() {
     sudo chown -R `whoami` /etc/contrail
     sudo chmod  664 /etc/contrail/*
     sudo chown -R `whoami` /etc/sysconfig/network-scripts
+    #changing permissions if dir is not empty
+    if [ "$(ls -A /etc/sysconfig/network-scripts/ 2 > /dev/null)" != "" ]
+    then
     sudo chmod  664 /etc/sysconfig/network-scripts/*
+    fi
     cd $TOP_DIR  
     
     #un-comment if required after review
@@ -1086,7 +1125,7 @@ function configure_contrail() {
     #invoke functions to change the files
     if [ "$INSTALL_PROFILE" = "ALL" ]; then
         replace_api_server_conf
-        replace_contrail_plugin_conf
+        #replace_contrail_plugin_conf  #same functionality is coming with devstack.
         replace_contrail_schema_conf
         replace_svc_monitor_conf
         replace_discovery_conf
@@ -1124,12 +1163,12 @@ function stop_contrail() {
     SAVED_SCREEN_NAME=$SCREEN_NAME
     SCREEN_NAME="contrail"
     SCREEN=$(which screen)
-    if [[ -n "$SCREEN" ]]; then
-        SESSION=$(screen -ls | awk '/[0-9].contrail/ { print $1 }')
-        if [[ -n "$SESSION" ]]; then
-            screen -X -S $SESSION quit
-        fi
-    fi
+    #if [[ -n "$SCREEN" ]]; then
+    #    SESSION=$(screen -ls | awk '/[0-9].contrail/ { print $1 }')
+    #    if [[ -n "$SESSION" ]]; then
+    #        screen -X -S $SESSION quit
+    #    fi
+    #fi
     (cd $CONTRAIL_SRC/third_party/zookeeper-3.4.6; ./bin/zkServer.sh stop)
     echo_summary "-----------------------STOPPING CONTRAIL--------------------------"
     if [ "$INSTALL_PROFILE" = "ALL" ]; then
@@ -1149,16 +1188,28 @@ function stop_contrail() {
         screen_stop ui-jobs
         screen_stop ui-webs
     fi
-    screen_stop agent  
-    rm $CONTRAIL_DIR/status/contrail/*.failure /dev/null 2>&1
-    cmd=$(lsmod | grep vrouter)
-    if [ $? == 0 ]; then
+ 
+    screen_stop agent
+     if [[ -n "$SCREEN" ]]; then
+        SESSION=$(screen -ls | awk '/[0-9].contrail/ { print $1 }')
+        if [[ -n "$SESSION" ]]; then
+            screen -X -S $SESSION quit
+        fi
+    fi
+
+    CONTRAIL_DIR="/home/tcs/contrail-installer"
+    if [ $(ls $CONTRAIL_DIR/status/contrail/*.failure 2>/dev/null | wc -l) != 0 ];then 
+        rm $CONTRAIL_DIR/status/contrail/*.failure 2>/dev/null
+    fi
+    #cmd=$(lsmod | grep vrouter)
+    #if [ $? == 0 ]; then
+    if [ "$(lsmod | grep vrouter 2>/dev/null)" != "" ]; then
         cmd=$(sudo rmmod vrouter)
         if [ $? == 0 ]; then
             source /etc/contrail/contrail-compute.conf
             if is_ubuntu; then
-                sudo ifdown  $dev
-                sudo ifup    $dev
+                sudo ifdown $dev
+		sudo ifup $dev 
                 sudo ifdown vhost0
                 
             else
